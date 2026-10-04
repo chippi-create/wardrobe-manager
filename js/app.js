@@ -1,10 +1,10 @@
 import * as db from './db.js';
 import { compressImage, blobToDataURL, dataURLToBlob } from './image.js';
 import { MERCARI, TOPS, KINDS, KIND_KEYS, CONDITIONS, kindOf, categoryPath, fromLegacyCategory } from './categories.js';
-import { WARMTH, OCCASIONS, suggestOutfits } from './suggest.js';
+import { WARMTH, SLEEVES, OCCASIONS, suggestOutfits } from './suggest.js';
 import { getPosition, fetchWeather, weatherLabel } from './weather.js';
 import { listingTitle, listingDescription } from './listing.js';
-import { guessFromCategory, detectColors } from './autofill.js';
+import { guessFromCategory, guessSleeve, detectColors } from './autofill.js';
 
 // ---------- 定数 ----------
 
@@ -176,6 +176,9 @@ function memberOutfits() {
 
 // ---------- 正規化（古いデータ・読み込んだデータを今の形にそろえる） ----------
 
+const SLEEVE_VALUES = SLEEVES.map((s) => s.value);
+const SLEEVE_KINDS = ['tops', 'outer', 'onepiece'];
+
 const strArr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
 
 function normalizeMember(raw) {
@@ -211,6 +214,8 @@ function normalizeItem(raw, fallbackMember) {
     colors: strArr(raw.colors),
     seasons: strArr(raw.seasons),
     warmth: warmth >= 1 && warmth <= 4 ? warmth : 2,
+    // 未設定（''）を選んだ服はそのまま。項目自体がない古いデータはカテゴリから推測する
+    sleeve: SLEEVE_VALUES.includes(raw.sleeve) ? raw.sleeve : guessSleeve(kind, mercariMid, mercariLeaf),
     occasions: strArr(raw.occasions).filter((o) => OCCASIONS.includes(o)),
     brand: String(raw.brand || ''),
     size: String(raw.size || ''),
@@ -572,9 +577,9 @@ function switchMember(id) {
 
 const itemDraft = {
   id: null, photo: null, memberId: null,
-  top: 'レディース', mid: '', leaf: '', colors: [], seasons: [], warmth: 2, occasions: [],
+  top: 'レディース', mid: '', leaf: '', colors: [], seasons: [], warmth: 2, sleeve: '', occasions: [],
   // 利用者が自分で触った項目は、自動入力で上書きしない
-  touched: { colors: false, seasons: false, warmth: false },
+  touched: { colors: false, seasons: false, warmth: false, sleeve: false },
   autoNotes: new Set(),
 };
 
@@ -586,6 +591,10 @@ function renderAutoHint() {
 
 function applyCategoryGuess() {
   const d = itemDraft;
+  if (!d.touched.sleeve) {
+    const sleeve = guessSleeve(kindOf(d.top, d.mid, d.leaf), d.mid, d.leaf);
+    if (sleeve) { d.sleeve = sleeve; d.autoNotes.add('袖の長さ'); }
+  }
   const guess = guessFromCategory(d.mid, d.leaf);
   if (!guess) return;
   if (!d.touched.warmth) { d.warmth = guess.warmth; d.autoNotes.add('暖かさ'); }
@@ -645,6 +654,8 @@ function renderItemChoices() {
     onclick: () => toggle(d.seasons, s, 'seasons'),
   })));
   segmented($('#itemWarmth'), WARMTH, d.warmth, (w) => { d.warmth = w; d.touched.warmth = true; renderItemChoices(); });
+  $('#itemSleeveField').hidden = !SLEEVE_KINDS.includes(kindOf(d.top, d.mid, d.leaf));
+  segmented($('#itemSleeve'), SLEEVES, d.sleeve, (v) => { d.sleeve = v; d.touched.sleeve = true; renderItemChoices(); });
   $('#itemOccasions').replaceChildren(...OCCASIONS.map((o) => chip(o, {
     pressed: d.occasions.includes(o),
     onclick: () => toggle(d.occasions, o),
@@ -681,10 +692,11 @@ function openItemDialog(item = null) {
   d.colors = [...(item?.colors ?? [])];
   d.seasons = [...(item?.seasons ?? [])];
   d.warmth = item?.warmth ?? 2;
+  d.sleeve = item?.sleeve ?? '';
   d.occasions = [...(item?.occasions ?? [])];
   // 登録済みの服は入力済みの値を尊重する（まとめて登録した未入力の服は自動入力の対象）
   const filled = item && !item.draft;
-  d.touched = { colors: !!filled, seasons: !!filled || !!item?.seasons.length, warmth: !!filled };
+  d.touched = { colors: !!filled, seasons: !!filled || !!item?.seasons.length, warmth: !!filled, sleeve: !!filled };
   d.autoNotes = new Set();
   setDraftPhoto(item?.photo ?? null);
 
@@ -730,6 +742,7 @@ function readItemForm(existing) {
     colors: [...d.colors],
     seasons: [...d.seasons],
     warmth: d.warmth,
+    sleeve: SLEEVE_KINDS.includes(kind) ? d.sleeve : '',
     occasions: [...d.occasions],
     brand: $('#itemBrand').value.trim(),
     size: $('#itemSize').value.trim(),

@@ -23,6 +23,18 @@ export function guessFromCategory(mid, leaf) {
   return null;
 }
 
+/** カテゴリから袖の長さを推測する（トップス・アウター・ワンピースのみ）。分からなければ ''。 */
+export function guessSleeve(kind, mid, leaf) {
+  if (!['tops', 'outer', 'onepiece'].includes(kind)) return '';
+  const text = leaf || '';
+  if (/キャミソール|タンクトップ|ベアトップ|チューブトップ|ホルターネック|ベスト|ジレ/.test(text)) return 'none';
+  if (/半袖|袖なし/.test(text)) return 'short';
+  if (/七分|長袖/.test(text)) return 'long';
+  if (kind === 'tops' && /ニット|セーター|トレーナー|スウェット|パーカー|カーディガン|ジャージ/.test(text)) return 'long';
+  if (kind === 'outer' && text && !/ポンチョ|その他/.test(text)) return 'long';
+  return '';
+}
+
 // ---------- 写真 → 色 ----------
 
 function rgbToHsl(r, g, b) {

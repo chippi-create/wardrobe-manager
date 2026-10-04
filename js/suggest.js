@@ -7,6 +7,22 @@ export const WARMTH = [
   { value: 4, label: '防寒', hint: '寒い日' },
 ];
 
+export const SLEEVES = [
+  { value: '', label: '未設定' },
+  { value: 'long', label: '長袖' },
+  { value: 'short', label: '半袖' },
+  { value: 'none', label: '袖なし' },
+];
+
+/**
+ * 重ね着として不自然な組み合わせか。長袖の服の上に半袖のアウターは合わせない。
+ * （ベストのような袖なしのアウターは、長袖の上に重ねてもよい）
+ */
+export function sleeveConflict(inner, outer) {
+  return outer.sleeve === 'short'
+    && inner.some((i) => (i.kind === 'tops' || i.kind === 'onepiece') && i.sleeve === 'long');
+}
+
 export const OCCASIONS = ['普段着', 'おでかけ', '仕事', '学校', 'フォーマル', 'スポーツ', '部屋着'];
 
 const NEUTRALS = new Set(['白', '黒', 'グレー', 'ベージュ', 'ブラウン', 'ネイビー']);
@@ -142,6 +158,7 @@ export function suggestOutfits(items, opts) {
 
   const suggestions = [];
   const seen = new Set();
+  let sleeveBlocked = false;
   const count = opts.count || 3;
   for (let attempt = 0; attempt < count * 8 && suggestions.length < count; attempt++) {
     const chosen = [];
@@ -158,7 +175,15 @@ export function suggestOutfits(items, opts) {
       break;
     }
     if (plan.outer !== 'none' && outers.length) {
-      add(pick(outers, items(), rand), plan.outer === 'optional' ? '羽織り（お好みで）' : 'アウター');
+      const inner = items();
+      const fitting = outers.filter((c) => !sleeveConflict(inner, c.item));
+      if (fitting.length) {
+        add(pick(fitting, inner, rand), plan.outer === 'optional' ? '羽織り（お好みで）' : 'アウター');
+      } else if (plan.outer === 'required') {
+        // 上に合わせられるアウターがないトップスは、寒い日には選ばない
+        sleeveBlocked = true;
+        continue;
+      }
     }
     add(pick(shoes, items(), rand), 'シューズ');
     add(pick(bags, items(), rand), 'バッグ');
@@ -177,5 +202,6 @@ export function suggestOutfits(items, opts) {
     suggestions.push({ items: chosen, notes });
   }
 
+  if (!suggestions.length && sleeveBlocked) missing.push('長袖の上に羽織れるアウター');
   return { plan, suggestions, missing };
 }
