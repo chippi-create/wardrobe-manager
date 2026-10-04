@@ -1,6 +1,6 @@
 // アプリ本体をキャッシュして、オフラインでも開けるようにする。
 // ファイルを更新したら CACHE のバージョンを上げる。
-const CACHE = 'wardrobe-v2';
+const CACHE = 'wardrobe-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const ASSETS = [
   './js/suggest.js',
   './js/weather.js',
   './js/listing.js',
+  './js/autofill.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',

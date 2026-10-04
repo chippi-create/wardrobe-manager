@@ -577,3 +577,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 @media (min-width: 600px) {
   .small-sheet { max-width: 420px; }
 }
+
+/* まとめて登録・自動入力 */
+.search-row { display: flex; gap: 8px; }
+.search-row input { flex: 1; min-width: 0; }
+.bulk-btn { flex: none; font-size: 13px; padding: 6px 12px; gap: 4px; }
+.bulk-btn svg { width: 18px; height: 18px; }
+.badge.draft { background: #c9821f; color: #fff; }
+.auto-hint {
+  margin: -6px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  color: var(--text);
+}

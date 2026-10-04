@@ -4,6 +4,7 @@ import { MERCARI, TOPS, KINDS, KIND_KEYS, CONDITIONS, kindOf, categoryPath, from
 import { WARMTH, OCCASIONS, suggestOutfits } from './suggest.js';
 import { getPosition, fetchWeather, weatherLabel } from './weather.js';
 import { listingTitle, listingDescription } from './listing.js';
+import { guessFromCategory, detectColors } from './autofill.js';
 
 // ---------- 定数 ----------
 
@@ -118,6 +119,7 @@ function forgetPhoto(id) {
 }
 
 function itemLabel(item) {
+  if (item.draft && !item.name) return '未入力の服';
   return item.name || item.mercariLeaf || KINDS[item.kind] || '服';
 }
 
@@ -215,6 +217,7 @@ function normalizeItem(raw, fallbackMember) {
     price: String(raw.price || ''),
     condition: CONDITIONS.includes(raw.condition) ? raw.condition : '',
     status: STATUS_LABELS[raw.status] ? raw.status : 'own',
+    draft: !!raw.draft,
     memo: String(raw.memo || ''),
     listingNote: String(raw.listingNote || ''),
     photo: raw.photo instanceof Blob ? raw.photo : null,
@@ -265,7 +268,7 @@ function filteredItems() {
   const list = memberItems().filter((item) => {
     if (status === 'active' && item.status === 'sold') return false;
     if (!['active', 'all'].includes(status) && item.status !== status) return false;
-    if (kind && item.kind !== kind) return false;
+    if (kind === 'draft') { if (!item.draft) return false; } else if (kind && item.kind !== kind) return false;
     if (color && !item.colors.includes(color)) return false;
     if (season && !item.seasons.includes(season)) return false;
     if (query && !`${item.name} ${item.brand} ${item.memo} ${item.mercariLeaf}`.toLowerCase().includes(query)) return false;
@@ -287,12 +290,18 @@ function filteredItems() {
 function renderKindFilter() {
   const counts = {};
   const items = memberItems().filter((i) => i.status !== 'sold');
-  for (const item of items) counts[item.kind] = (counts[item.kind] || 0) + 1;
+  for (const item of items) if (!item.draft) counts[item.kind] = (counts[item.kind] || 0) + 1;
+  const drafts = items.filter((i) => i.draft).length;
+  if (state.filter.kind === 'draft' && !drafts) state.filter.kind = '';
   $('#kindFilter').replaceChildren(
     chip(`すべて ${items.length}`, {
       pressed: !state.filter.kind,
       onclick: () => { state.filter.kind = ''; renderCloset(); },
     }),
+    ...(drafts ? [chip(`未入力 ${drafts}`, {
+      pressed: state.filter.kind === 'draft',
+      onclick: () => { state.filter.kind = state.filter.kind === 'draft' ? '' : 'draft'; renderCloset(); },
+    })] : []),
     ...KIND_KEYS.filter((k) => counts[k]).map((k) => chip(`${KINDS[k]} ${counts[k]}`, {
       pressed: state.filter.kind === k,
       onclick: () => { state.filter.kind = state.filter.kind === k ? '' : k; renderCloset(); },
@@ -307,7 +316,9 @@ function itemCard(item) {
     onclick: () => openItemDialog(item),
   }, [
     thumb(item),
-    item.status !== 'own' ? el('span', { class: `badge ${item.status}`, text: STATUS_LABELS[item.status] }) : null,
+    item.draft
+      ? el('span', { class: 'badge draft', text: '未入力' })
+      : item.status !== 'own' ? el('span', { class: `badge ${item.status}`, text: STATUS_LABELS[item.status] }) : null,
     el('div', { class: 'meta' }, [
       el('div', { class: 'name', text: itemLabel(item) }),
       el('div', { class: 'sub', text: [item.brand, describeWear(item)].filter(Boolean).join(' · ') }),
@@ -562,7 +573,36 @@ function switchMember(id) {
 const itemDraft = {
   id: null, photo: null, memberId: null,
   top: 'レディース', mid: '', leaf: '', colors: [], seasons: [], warmth: 2, occasions: [],
+  // 利用者が自分で触った項目は、自動入力で上書きしない
+  touched: { colors: false, seasons: false, warmth: false },
+  autoNotes: new Set(),
 };
+
+function renderAutoHint() {
+  const hint = $('#itemAutoHint');
+  hint.hidden = !itemDraft.autoNotes.size;
+  hint.textContent = `${[...itemDraft.autoNotes].join('・')}を自動で選びました。違うときはタップして直せます。`;
+}
+
+function applyCategoryGuess() {
+  const d = itemDraft;
+  const guess = guessFromCategory(d.mid, d.leaf);
+  if (!guess) return;
+  if (!d.touched.warmth) { d.warmth = guess.warmth; d.autoNotes.add('暖かさ'); }
+  if (!d.touched.seasons) { d.seasons = guess.seasons; d.autoNotes.add('季節'); }
+}
+
+async function applyColorGuess(blob) {
+  const d = itemDraft;
+  if (d.touched.colors || d.colors.length) return;
+  try {
+    const colors = await detectColors(blob);
+    if (!colors.length || d.touched.colors || d.photo !== blob) return;
+    d.colors = colors;
+    d.autoNotes.add('色');
+    renderItemChoices();
+  } catch { /* 色が分からなくても登録はできる */ }
+}
 
 function renderItemChoices() {
   const d = itemDraft;
@@ -575,7 +615,7 @@ function renderItemChoices() {
   $('#itemMid').replaceChildren(...mids.map((mid) => chip(mid, {
     role: 'radio',
     pressed: d.mid === mid,
-    onclick: () => { d.mid = d.mid === mid ? '' : mid; d.leaf = ''; renderItemChoices(); },
+    onclick: () => { d.mid = d.mid === mid ? '' : mid; d.leaf = ''; applyCategoryGuess(); renderItemChoices(); },
   })));
 
   const node = MERCARI[d.top][d.mid];
@@ -585,29 +625,31 @@ function renderItemChoices() {
     $('#itemLeaf').replaceChildren(...node.leaves.map((leaf) => chip(leaf, {
       role: 'radio',
       pressed: d.leaf === leaf,
-      onclick: () => { d.leaf = d.leaf === leaf ? '' : leaf; renderItemChoices(); },
+      onclick: () => { d.leaf = d.leaf === leaf ? '' : leaf; applyCategoryGuess(); renderItemChoices(); },
     })));
   }
 
-  const toggle = (list, value) => {
+  const toggle = (list, value, field) => {
     const i = list.indexOf(value);
     if (i >= 0) list.splice(i, 1); else list.push(value);
+    if (field) d.touched[field] = true;
     renderItemChoices();
   };
   $('#itemColors').replaceChildren(...COLORS.map((c) => chip(c.name, {
     pressed: d.colors.includes(c.name),
     prefix: swatch(c.name),
-    onclick: () => toggle(d.colors, c.name),
+    onclick: () => toggle(d.colors, c.name, 'colors'),
   })));
   $('#itemSeasons').replaceChildren(...SEASONS.map((s) => chip(s, {
     pressed: d.seasons.includes(s),
-    onclick: () => toggle(d.seasons, s),
+    onclick: () => toggle(d.seasons, s, 'seasons'),
   })));
-  segmented($('#itemWarmth'), WARMTH, d.warmth, (w) => { d.warmth = w; renderItemChoices(); });
+  segmented($('#itemWarmth'), WARMTH, d.warmth, (w) => { d.warmth = w; d.touched.warmth = true; renderItemChoices(); });
   $('#itemOccasions').replaceChildren(...OCCASIONS.map((o) => chip(o, {
     pressed: d.occasions.includes(o),
     onclick: () => toggle(d.occasions, o),
   })));
+  renderAutoHint();
 }
 
 let draftPhotoURL = null;
@@ -640,6 +682,10 @@ function openItemDialog(item = null) {
   d.seasons = [...(item?.seasons ?? [])];
   d.warmth = item?.warmth ?? 2;
   d.occasions = [...(item?.occasions ?? [])];
+  // 登録済みの服は入力済みの値を尊重する（まとめて登録した未入力の服は自動入力の対象）
+  const filled = item && !item.draft;
+  d.touched = { colors: !!filled, seasons: !!filled || !!item?.seasons.length, warmth: !!filled };
+  d.autoNotes = new Set();
   setDraftPhoto(item?.photo ?? null);
 
   $('#itemName').value = item?.name ?? '';
@@ -655,7 +701,10 @@ function openItemDialog(item = null) {
   $('#itemMember').value = d.memberId;
   $('#itemMemberField').hidden = state.members.length < 2;
 
-  $('#itemDialogTitle').textContent = item ? '服の詳細' : '服を登録';
+  const draftsLeft = memberItems().filter((i) => i.draft).length;
+  $('#itemDialogTitle').textContent = item?.draft
+    ? `未入力の服（残り${draftsLeft}件）`
+    : item ? '服の詳細' : '服を登録';
   $('#itemDeleteBtn').hidden = !item;
   $('#itemListingBtn').hidden = !item;
   $('#itemWearSection').hidden = !item;
@@ -689,6 +738,7 @@ function readItemForm(existing) {
     status: $('#itemStatus').value,
     memo: $('#itemMemo').value.trim(),
     listingNote: existing?.listingNote ?? '',
+    draft: false,
     photo: d.photo,
     wornDates: existing?.wornDates ?? [],
     createdAt: existing?.createdAt ?? now,
@@ -702,6 +752,7 @@ async function saveItem({ close = true } = {}) {
     return null;
   }
   const existing = state.items.find((i) => i.id === itemDraft.id);
+  const existingWasDraft = existing?.draft;
   const item = readItemForm(existing);
   await db.put('items', item);
   if (existing) {
@@ -711,12 +762,68 @@ async function saveItem({ close = true } = {}) {
     state.items.push(item);
     itemDraft.id = item.id;
   }
+  const wasDraft = !!existingWasDraft;
   if (close) {
     $('#itemDialog').close();
-    toast(existing ? '保存しました' : '登録しました');
+    // 一覧と同じ並び（新しい順）で次の未入力の服を開く
+    const next = wasDraft && memberItems().filter((i) => i.draft).sort((a, b) => b.createdAt - a.createdAt)[0];
+    render();
+    if (next) {
+      openItemDialog(next);
+      toast('保存しました。次の服です');
+    } else {
+      toast(wasDraft ? 'まとめて登録した服の入力がすべて終わりました' : existing ? '保存しました' : '登録しました');
+    }
+    return existing ?? item;
   }
   render();
   return existing ?? item;
+}
+
+// ---------- まとめて登録 ----------
+
+async function bulkRegister(files) {
+  const member = currentMember();
+  const label = $('#bulkLabel');
+  const original = label.textContent;
+  let done = 0;
+  let failed = 0;
+  const now = Date.now();
+  for (const [index, file] of files.entries()) {
+    label.textContent = `登録中… ${index + 1}/${files.length}`;
+    try {
+      const photo = await compressImage(file);
+      const colors = await detectColors(photo).catch(() => []);
+      const item = normalizeItem({
+        id: uid(),
+        memberId: member.id,
+        kind: 'other',
+        mercariTop: member.top,
+        colors,
+        photo,
+        draft: true,
+        // 選んだ順に並ぶよう、少しずつ時刻をずらす
+        createdAt: now + index,
+        updatedAt: now + index,
+      }, member);
+      await db.put('items', item);
+      state.items.push(item);
+      done++;
+    } catch (err) {
+      console.error(err);
+      failed++;
+    }
+  }
+  label.textContent = original;
+  state.filter.kind = done ? 'draft' : state.filter.kind;
+  render();
+  if (!done) {
+    alert('写真を読み込めませんでした。');
+    return;
+  }
+  toast(failed
+    ? `${done}着を登録しました（${failed}枚は読み込めませんでした）`
+    : `${done}着を登録しました。服をタップして、カテゴリなどを入れてください`);
 }
 
 async function deleteItem() {
@@ -1189,10 +1296,17 @@ function setupEvents() {
     e.target.value = '';
     if (!file) return;
     try {
-      setDraftPhoto(await compressImage(file));
+      const blob = await compressImage(file);
+      setDraftPhoto(blob);
+      await applyColorGuess(blob);
     } catch (err) {
       alert(err.message);
     }
+  });
+  $('#bulkPhotoInput').addEventListener('change', (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (files.length) bulkRegister(files);
   });
   $('#itemForm').addEventListener('submit', (e) => { e.preventDefault(); saveItem(); });
   $('#itemDeleteBtn').addEventListener('click', deleteItem);
