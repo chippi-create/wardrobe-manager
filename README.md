@@ -62,13 +62,13 @@ python3 -m http.server 8000
 # http://localhost:8000 を開く
 ```
 
-## 公開（Cloudflare Pages）
+## 公開
 
-1. Cloudflare にログインし、Workers & Pages → Create → Pages → Connect to Git
-2. このリポジトリを選ぶ
-3. Framework preset は `None`、Build command は空欄、Build output directory は `/`
-4. Save and Deploy
+Cloudflare Workers（静的アセットのみ）で公開しています。
 
-以降は `main` にプッシュするたびに自動で更新されます。
+- URL：https://wardrobe-manager.cps-create.workers.dev
+- `main` にプッシュするたびに自動で更新されます
+
+これからの方針は [docs/ROADMAP.md](docs/ROADMAP.md) にまとめています。
 
 アプリを更新したときは、`sw.js` の `CACHE` のバージョン（`wardrobe-v1` など）を上げると、使っている人の端末に新しい版が確実に届きます。
