@@ -1,8 +1,8 @@
 // IndexedDB の薄いラッパー。データはこの端末のブラウザ内だけに保存される。
 
 const DB_NAME = 'wardrobe-manager';
-const DB_VERSION = 1;
-export const STORES = ['items', 'outfits'];
+const DB_VERSION = 2;
+export const STORES = ['items', 'outfits', 'members'];
 
 let dbPromise;
 
@@ -18,7 +18,12 @@ function openDB() {
           }
         }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // 新しい版のアプリが別のタブで開かれたら、更新を妨げないように閉じる
+        db.onversionchange = () => { db.close(); location.reload(); };
+        resolve(db);
+      };
       req.onerror = () => reject(req.error);
     });
   }
